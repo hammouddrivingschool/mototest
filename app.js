@@ -173,7 +173,7 @@ function showResults() {
   document.getElementById("quizView").classList.add("hidden");
   document.getElementById("resultsView").classList.remove("hidden");
 
-  const phone = localStorage.getItem("quiz_phone") || "03/884472 - 01/310341";
+  const phone = localStorage.getItem("quiz_phone") || "01/310341 - 03/884472";
   document.getElementById("resultUser").textContent = ` Hammoud Driving School  — ${phone}`;
 
  const passed = quiz.score >= 24;
@@ -252,7 +252,7 @@ function startNewExam() {
 
 async function init() {
   // Always show school name + phone in quiz header
-  const phone = localStorage.getItem("quiz_phone") || "03/884472 - 01/310341";
+  const phone = localStorage.getItem("quiz_phone") || "01/310341 - 03/884472";
 
   document.getElementById("userName").textContent = "Hammoud Driving School";
   document.getElementById("userPhone").textContent = phone;

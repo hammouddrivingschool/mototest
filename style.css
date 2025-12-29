@@ -454,7 +454,7 @@ h1, h2, h3{
 
   box-shadow: var(--shadow);
 }
- 
+
 .landing-title{
   margin: 0;
   font-size: 40px;
@@ -478,7 +478,7 @@ h1, h2, h3{
 /* CTA */
 /* CTA buttons container */
 .landing-actions{
-  margin-top: 22px;
+  margin-top: 80px;
   display: flex;
   gap: 16px;
   justify-content: center;

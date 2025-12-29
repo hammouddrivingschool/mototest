@@ -5,9 +5,10 @@ let quiz = {
   list: [],
   index: 0,
   score: 0,
-  selected: null,     // selected index (original index in q.choices)
-  locked: false,
-  answers: []         // { id, chosenIndex, correctIndex }
+  selected: null,   // selected index (original index in q.choices)
+  locked: false,    // becomes true only AFTER confirm
+  answers: [],      // { id, chosenIndex, correctIndex }
+  _lastNextAt: 0
 };
 
 const TAKE_COUNT = 30; // always random 30 questions
@@ -22,14 +23,53 @@ function shuffle(arr) {
 }
 
 async function loadQuestions() {
-  const res = await fetch("questions.json");
+  const VERSION = "20251228-1";
+const res = await fetch(`questions.json?v=${VERSION}`, { cache: "no-store" });
+
   if (!res.ok) throw new Error("Could not load questions.json");
   return await res.json();
 }
 
+function setButtonEnabled(btn, enabled) {
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.setAttribute("aria-disabled", String(!enabled));
+  btn.style.pointerEvents = enabled ? "auto" : "none"; // HARD block taps on mobile
+}
+
+function bindTap(el, handler) {
+  if (!el) return;
+
+  const wrapped = (e) => {
+    // If it's disabled, ignore (extra safety for mobile weirdness)
+    if (el.disabled) return;
+
+    // prevent ghost tap / scroll tap
+    if (e && typeof e.preventDefault === "function") e.preventDefault();
+
+    handler(e);
+  };
+
+  if (window.PointerEvent) {
+    el.addEventListener("pointerup", wrapped, { passive: false });
+  } else {
+    el.addEventListener("touchend", wrapped, { passive: false });
+    el.addEventListener("click", wrapped);
+  }
+}
+
+function preloadImages(list) {
+  (list || []).forEach((q) => {
+    const src = (q && q.image) ? String(q.image) : "";
+    if (src.trim() !== "") {
+      const img = new Image();
+      img.src = src;
+    }
+  });
+}
+
 function setProgress() {
-  // progress should represent current question position (1..N)
-  const pct = ((quiz.index) / quiz.list.length) * 100;
+  const pct = (quiz.index / quiz.list.length) * 100;
   const progressEl = document.getElementById("progress");
   if (progressEl) progressEl.style.setProperty("--p", `${pct}%`);
 
@@ -43,32 +83,33 @@ function renderQuestion() {
   const q = quiz.list[quiz.index];
 
   const qTextEl = document.getElementById("qText");
-  const qImgEl  = document.getElementById("qImg");
+  const qImgEl = document.getElementById("qImg");
 
   // Reset state
   quiz.selected = null;
   quiz.locked = false;
 
-  // Disable buttons until selection + confirm
   const confirmBtn = document.getElementById("confirmBtn");
   const nextBtn = document.getElementById("nextBtn");
-  if (confirmBtn) confirmBtn.disabled = true;
-  if (nextBtn) nextBtn.disabled = true;
 
-  // Hide feedback completely (you said you don't want it)
+  // Confirm/Next must be OFF until selection + confirm
+  setButtonEnabled(confirmBtn, false);
+  setButtonEnabled(nextBtn, false);
+
+  // Hide feedback completely
   const fb = document.getElementById("feedback");
   if (fb) {
     fb.className = "feedback hidden";
     fb.textContent = "";
   }
 
-  // Question image/text handling
-  const hasImg = q.image && String(q.image).trim() !== "";
+  // Question image/text handling (NO ?? for Android)
+  const hasImg = q && q.image && String(q.image).trim() !== "";
   if (hasImg) {
     qImgEl.src = q.image;
     qImgEl.classList.remove("hidden");
 
-    const t = (q.question ?? "").trim();
+    const t = ((q.question || "")).trim();
     if (t === "") {
       qTextEl.textContent = "";
       qTextEl.classList.add("hidden");
@@ -80,7 +121,7 @@ function renderQuestion() {
     qImgEl.removeAttribute("src");
     qImgEl.classList.add("hidden");
 
-    qTextEl.textContent = q.question ?? "";
+    qTextEl.textContent = (q && q.question) ? q.question : "";
     qTextEl.classList.remove("hidden");
   }
 
@@ -88,10 +129,8 @@ function renderQuestion() {
   const box = document.getElementById("choices");
   box.innerHTML = "";
 
-  // IMPORTANT: keep mapping correctIndex/chosenIndex aligned with original indexes.
-  // So we will NOT change indexes — we will just not render empty strings.
-  q.choices.forEach((text, idx) => {
-    if (String(text ?? "").trim() === "") return;
+  (q.choices || []).forEach((text, idx) => {
+    if (String(text || "").trim() === "") return;
 
     const btn = document.createElement("button");
     btn.className = "choice";
@@ -99,15 +138,19 @@ function renderQuestion() {
     btn.innerHTML = `<span>${text}</span>`;
     btn.dataset.index = String(idx); // original index
 
-    btn.addEventListener("click", () => {
+    bindTap(btn, () => {
       if (quiz.locked) return;
 
       // remove previous selection
-      [...box.querySelectorAll(".choice")].forEach(b => b.classList.remove("selected"));
+      [...box.querySelectorAll(".choice")].forEach((b) =>
+        b.classList.remove("selected")
+      );
 
       btn.classList.add("selected");
-      quiz.selected = idx; // original index
-      if (confirmBtn) confirmBtn.disabled = false;
+      quiz.selected = idx;
+
+      // allow confirm after picking an answer
+      setButtonEnabled(confirmBtn, true);
     });
 
     box.appendChild(btn);
@@ -128,39 +171,40 @@ function revealAnswer() {
 
   const correct = q.correctIndex;
 
-  // Save answer even if correctIndex missing
+  // Save answer
   quiz.answers[quiz.index] = { id: q.id, chosenIndex: chosen, correctIndex: correct };
 
-  // If correctIndex is missing, just unlock next (no colors)
+  // If correctIndex missing, just unlock next (no colors)
   if (typeof correct !== "number") {
-    const nextBtn = document.getElementById("nextBtn");
-    const confirmBtn = document.getElementById("confirmBtn");
-    if (nextBtn) nextBtn.disabled = false;
-    if (confirmBtn) confirmBtn.disabled = true;
+    setButtonEnabled(document.getElementById("nextBtn"), true);
+    setButtonEnabled(document.getElementById("confirmBtn"), false);
     return;
   }
 
-  // Mark correct green + wrong selected red (NO FEEDBACK MESSAGE)
-  buttons.forEach(btn => {
+  // Mark correct / wrong + lock choices
+  buttons.forEach((btn) => {
     const idx = Number(btn.dataset.index);
     if (idx === correct) btn.classList.add("correct");
     if (idx === chosen && chosen !== correct) btn.classList.add("wrong");
-
-    // lock clicks
     btn.style.pointerEvents = "none";
   });
 
-  // Score
   if (chosen === correct) quiz.score += 1;
 
   // Enable next, disable confirm
-  const nextBtn = document.getElementById("nextBtn");
-  const confirmBtn = document.getElementById("confirmBtn");
-  if (nextBtn) nextBtn.disabled = false;
-  if (confirmBtn) confirmBtn.disabled = true;
+  setButtonEnabled(document.getElementById("nextBtn"), true);
+  setButtonEnabled(document.getElementById("confirmBtn"), false);
 }
 
 function nextQuestion() {
+  // ✅ Hard guard: you cannot go next unless you confirmed
+  if (!quiz.locked) return;
+
+  // ✅ Anti double-tap
+  const now = Date.now();
+  if (now - quiz._lastNextAt < 250) return;
+  quiz._lastNextAt = now;
+
   if (quiz.index < quiz.list.length - 1) {
     quiz.index += 1;
     renderQuestion();
@@ -173,18 +217,18 @@ function showResults() {
   document.getElementById("quizView").classList.add("hidden");
   document.getElementById("resultsView").classList.remove("hidden");
 
-  const phone = localStorage.getItem("quiz_phone") || "01/310341 - 03/884472";
-  document.getElementById("resultUser").textContent = ` Hammoud Driving School  — ${phone}`;
+  const phone = localStorage.getItem("quiz_phone") || "03836482 - 03720630";
+  document.getElementById("resultUser").textContent = `مدرسة بسام هاشم — ${phone}`;
 
- const passed = quiz.score >= 24;
+  const passed = quiz.score >= 24;
 
-document.getElementById("scoreBox").innerHTML = `
-  <div class="score-title">علامتك</div>
-  <div class="score-value">${quiz.score} / ${quiz.list.length}</div>
-  <div class="result-status ${passed ? "pass" : "fail"}">
-    النتيجة: ${passed ? "ناجح" : "راسب"}
-  </div>
-`;
+  document.getElementById("scoreBox").innerHTML = `
+    <div class="score-title">علامتك</div>
+    <div class="score-value">${quiz.score} / ${quiz.list.length}</div>
+    <div class="result-status ${passed ? "pass" : "fail"}">
+      النتيجة: ${passed ? "ناجح" : "راسب"}
+    </div>
+  `;
 
   const review = document.getElementById("reviewList");
   review.innerHTML = "";
@@ -205,7 +249,7 @@ document.getElementById("scoreBox").innerHTML = `
     const isCorrect =
       (typeof a.correctIndex === "number") && (a.chosenIndex === a.correctIndex);
 
-    const qText = (q.question ?? "").trim();
+    const qText = ((q.question || "")).trim();
     const hasImg = q.image && String(q.image).trim() !== "";
 
     const item = document.createElement("div");
@@ -241,8 +285,10 @@ function startNewExam() {
   quiz.selected = null;
   quiz.locked = false;
   quiz.answers = [];
+  quiz._lastNextAt = 0;
 
   quiz.list = shuffle(QUESTIONS).slice(0, Math.min(TAKE_COUNT, QUESTIONS.length));
+  preloadImages(quiz.list);
 
   document.getElementById("resultsView").classList.add("hidden");
   document.getElementById("quizView").classList.remove("hidden");
@@ -251,29 +297,30 @@ function startNewExam() {
 }
 
 async function init() {
-  // Always show school name + phone in quiz header
-  const phone = localStorage.getItem("quiz_phone") || "01/310341 - 03/884472";
+  const phone = localStorage.getItem("quiz_phone") || "03836482 - 03720630";
 
-  document.getElementById("userName").textContent = "Hammoud Driving School";
+  document.getElementById("userName").textContent = "مدرسة بسام هاشم";
   document.getElementById("userPhone").textContent = phone;
 
   QUESTIONS = await loadQuestions();
 
   quiz.list = shuffle(QUESTIONS).slice(0, Math.min(TAKE_COUNT, QUESTIONS.length));
+  preloadImages(quiz.list);
+
   quiz.index = 0;
   quiz.score = 0;
   quiz.answers = [];
+  quiz._lastNextAt = 0;
 
-  document.getElementById("confirmBtn").addEventListener("click", revealAnswer);
-  document.getElementById("nextBtn").addEventListener("click", nextQuestion);
+  bindTap(document.getElementById("confirmBtn"), revealAnswer);
+  bindTap(document.getElementById("nextBtn"), nextQuestion);
+  bindTap(document.getElementById("retryBtn"), startNewExam);
 
-  document.getElementById("retryBtn").addEventListener("click", startNewExam);
-
-  document.getElementById("homeBtn").addEventListener("click", () => {
+  bindTap(document.getElementById("homeBtn"), () => {
     window.location.href = "index.html";
   });
 
   renderQuestion();
 }
 
-init().catch(err => alert("Error: " + err.message));
+init().catch((err) => alert("Error: " + err.message));

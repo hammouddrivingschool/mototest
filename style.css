@@ -799,6 +799,7 @@ button, .choice, .btn, a {
 
 @media (max-width: 768px){
   .landing-hero{
-    background-position: center top; /* ✅ better crop for tall screens */
+    background-position: 60% top; /* ✅ better crop for tall screens */
+    
   }
 }
